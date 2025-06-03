@@ -1,29 +1,41 @@
-
-FROM composer:2.7 AS build
+FROM composer:2.7 AS composer
 
 WORKDIR /app
 
-COPY composer.json composer.lock ./
-RUN composer install --no-dev --prefer-dist --no-scripts --no-plugins --no-interaction --optimize-autoloader
+COPY composer.* ./
+RUN composer install --no-dev --no-scripts --no-plugins --no-interaction --optimize-autoloader
 
-COPY . .
 
-FROM php:8.2-fpm-alpine
+FROM node:20-alpine AS node
 
+WORKDIR /app
+
+COPY package.json vite.config.js ./
+COPY resources/ ./resources/
+
+RUN npm install && npm run build
+
+FROM php:8.2-cli-alpine
 
 RUN apk add --no-cache \
-    bash curl \
-    php-bcmath php-curl php-mbstring php-mysqlnd \
-    php-opcache php-pdo php-pdo_mysql php-tokenizer \
-    php-xml php-ctype php-fileinfo php-json php-phar \
-    php-openssl php-simplexml php-dom php-session
+    libzip-dev \
+    zip \
+    && docker-php-ext-install pdo pdo_mysql opcache
+
 
 WORKDIR /var/www
-COPY --from=build /app /var/www
-RUN chown -R www-data:www-data /var/www \
-    && chmod -R 755 /var/www/storage /var/www/bootstrap/cache
+COPY . .
+COPY --from=composer /app/vendor ./vendor
+COPY --from=node /app/public/build ./public/build
 
+RUN cp .env.example .env \
+    && php artisan key:generate \
+    && chmod -R 775 storage bootstrap/cache
 
-EXPOSE 9000
+RUN php artisan config:cache \
+    && php artisan route:cache \
+    && php artisan view:cache
 
-CMD ["php-fpm"]
+EXPOSE 8000
+
+CMD ["php", "artisan", "serve", "--host=0.0.0.0", "--port=8000"]
